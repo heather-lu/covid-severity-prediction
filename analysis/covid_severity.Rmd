@@ -1,0 +1,313 @@
+---
+title: "Predicting COVID-19 Illness Severity"
+author: "Heather Lu"
+date: "2026-05-11"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(caret)
+library(tidymodels)
+library(pROC)
+library(pdp)
+library(gbm)
+library(kernlab)
+library(gridExtra)
+library(knitr)
+library(rpart.plot)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Load Dataset + Clean
+```{r}
+# Load the full dataset
+load("../data/severity.RData")
+
+# Set the random seed to the last 4 digits of YOUR UNI
+set.seed(3978)
+
+# Randomly sample 1,000 participants
+my_dat <- dat[sample(nrow(dat), 1000), ]
+
+# Convert categorical variables to factors
+my_dat <- my_dat |>
+  mutate(
+    severity = factor(severity, levels = c(1, 0), labels = c("severe", "not_severe")),
+    gender = factor(gender),
+    race = factor(race),
+    smoking = factor(smoking),
+    hypertension = factor(hypertension),
+    diabetes = factor(diabetes),
+    vaccine = factor(vaccine)
+  ) |>
+  dplyr::select(-id)
+
+# 80/20 train/test split
+set.seed(3978)
+data_split <- initial_split(my_dat, prop = 0.8)
+training_data <- training(data_split)
+testing_data <- testing(data_split)
+```
+
+# EDA
+```{r}
+# Summary statistics table by severity group
+summary_table <- my_dat |>
+  group_by(severity) |>
+  summarise(
+    n = n(),
+    age_mean_sd = paste0(round(mean(age), 1), " (", round(sd(age), 1), ")"),
+    bmi_mean_sd = paste0(round(mean(bmi), 1), " (", round(sd(bmi), 1), ")"),
+    sbp_mean_sd = paste0(round(mean(SBP), 1), " (", round(sd(SBP), 1), ")"),
+    ldl_mean_sd = paste0(round(mean(LDL), 1), " (", round(sd(LDL), 1), ")"),
+    dep_mean_sd = paste0(round(mean(depression), 1), " (", round(sd(depression), 1), ")"),
+    pct_male = paste0(round(mean(gender == 1) * 100, 1), "%"),
+    pct_vaccinated = paste0(round(mean(vaccine == 1) * 100, 1), "%"),
+    pct_htn = paste0(round(mean(hypertension == 1) * 100, 1), "%"),
+    pct_diabetes = paste0(round(mean(diabetes == 1) * 100, 1), "%")
+  ) |>
+  t() |>
+  as.data.frame()
+
+kable(summary_table, 
+      col.names = c("Severe", "Not Severe"),
+      caption = "Summary Statistics by severity group.")
+```
+```{r}
+# Figure 1a: box plots for continuous predictors 
+p1 <- training_data |>
+  dplyr::select(severity, age, bmi, SBP, LDL, depression) |>
+  pivot_longer(cols = -severity, names_to = "variable", values_to = "value") |>
+  ggplot(aes(x = severity, y = value, fill = severity)) +
+  geom_boxplot() +
+  facet_wrap(~ variable, scales = "free_y") +
+  labs(x = "", y = "") +
+  theme_bw() +
+  theme(legend.position = "none")
+
+# Figure 1b: bar chart for categorical predictors  
+p2 <- training_data |>
+  dplyr::select(severity, gender, race, smoking, hypertension, diabetes, vaccine) |>
+  pivot_longer(cols = -severity, names_to = "variable", values_to = "value") |>
+  ggplot(aes(x = value, fill = severity)) +
+  geom_bar(position = "fill") +
+  facet_wrap(~ variable, scales = "free_x") +
+  labs(y = "Proportion", x = "") +
+  theme_bw()
+
+# Combine
+grid.arrange(p1, p2, nrow = 2)
+```
+
+# Model Training
+```{r}
+# ctrl object: shared across all 4 models
+ctrl <- trainControl(method = "cv",
+                     number = 10,
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE)
+```
+
+### Model 1: Logistic Regression
+
+```{r}
+set.seed(3978)
+model.glm <- train(severity ~ .,
+                   data = training_data,
+                   method = "glm",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+model.glm$results
+```
+### Model 2: Decision Tree
+
+```{r}
+set.seed(3978)
+model.rpart <- train(severity ~ .,
+                     data = training_data,
+                     method = "rpart",
+                     tuneGrid = data.frame(cp = exp(seq(-8, -3, len = 100))),
+                     metric = "ROC",
+                     trControl = ctrl)
+
+# CV plot — ROC vs cp (log scale)
+plot(model.rpart, xTrans = log)
+
+# Plot the final pruned tree
+rpart.plot(model.rpart$finalModel)
+
+# Best cp value
+model.rpart$bestTune
+```
+### Model 3: AdaBoost
+
+```{r}
+gbmA.grid <- expand.grid(n.trees = c(100, 200, 500, 1000, 2000),
+                         interaction.depth = 1:4,
+                         shrinkage = c(0.001, 0.003, 0.005),
+                         n.minobsinnode = 10)
+
+set.seed(3978)
+model.gbmA <- train(severity ~ .,
+                    data = training_data,
+                    method = "gbm",
+                    distribution = "adaboost",
+                    tuneGrid = gbmA.grid,
+                    metric = "ROC",
+                    trControl = ctrl,
+                    verbose = FALSE)
+
+model.gbmA$bestTune
+ggplot(model.gbmA, highlight = TRUE)
+```
+
+### Model 4: SVM-Radial
+
+```{r, warning = FALSE}
+svmr.grid <- expand.grid(C = exp(seq(1, 7, len = 30)),
+                         sigma = exp(seq(-10, -2, len = 15)))
+
+set.seed(3978)
+model.svmr <- train(severity ~ .,
+                    data = training_data,
+                    method = "svmRadialSigma",
+                    tuneGrid = svmr.grid,
+                    metric = "ROC",
+                    trControl = ctrl)
+
+model.svmr$bestTune
+
+myCol <- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+              superpose.line   = list(col = myCol))
+
+plot(model.svmr, highlight = TRUE, par.settings = myPar)
+```
+
+# Model Comparison
+```{r}
+resamp <- resamples(list(GLM = model.glm,
+                         RPART = model.rpart,
+                         GBM = model.gbmA,
+                         SVMR = model.svmr))
+
+summary(resamp)
+
+# Box plot of CV ROC across models 
+bwplot(resamp, metric = "ROC")
+
+# Table 2: CV performance summary
+cv_summary <- data.frame(
+  Model = c("Logistic Regression", "Decision Tree", "AdaBoost", "SVM-Radial"),
+  Mean_AUC = c(0.861, 0.833, 0.868, 0.859),
+  Median_AUC = c(0.867, 0.844, 0.861, 0.871),
+  Mean_Sensitivity = c(0.676, 0.679, 0.660, 0.734),
+  Mean_Specificity = c(0.885, 0.893, 0.915, 0.810)
+)
+
+kable(cv_summary,
+      caption = "Cross-validated model performance across 10 folds.",
+      col.names = c("Model", "Mean AUC", "Median AUC",
+                    "Mean Sensitivity", "Mean Specificity"),
+      digits = 3)
+```
+
+# Test set performance & ROC curves
+```{r}
+# Get predicted probabilities on test set for all 4 models
+glm.pred <- predict(model.glm, newdata = testing_data, type = "prob")[, "severe"]
+rpart.pred <- predict(model.rpart, newdata = testing_data, type = "prob")[, "severe"]
+gbmA.pred <- predict(model.gbmA, newdata = testing_data, type = "prob")[, "severe"]
+svmr.pred <- predict(model.svmr, newdata = testing_data, type = "prob")[, "severe"]
+
+# Compute ROC curves
+roc.glm <- roc(testing_data$severity, glm.pred, quiet = TRUE)
+roc.rpart <- roc(testing_data$severity, rpart.pred, quiet = TRUE)
+roc.gbmA <- roc(testing_data$severity, gbmA.pred, quiet = TRUE)
+roc.svmr <- roc(testing_data$severity, svmr.pred, quiet = TRUE)
+
+# Plot all ROC curves together
+plot(roc.glm, legacy.axes = TRUE, col = 1)
+plot(roc.rpart, add = TRUE, col = 2)
+plot(roc.gbmA, add = TRUE, col = 3)
+plot(roc.svmr, add = TRUE, col = 4)
+
+# AUC values in legend
+auc_vals <- c(roc.glm$auc[1], roc.rpart$auc[1], 
+                roc.gbmA$auc[1], roc.svmr$auc[1])
+modelNames <- c("Logistic", "Decision Tree", "AdaBoost", "SVM-Radial")
+legend("bottomright",
+       legend = paste0(modelNames, ": ", round(auc_vals, 3)),
+       col = 1:4, lwd = 2)
+```
+
+# Variable Importance
+```{r}
+# Variable importance from best model (AdaBoost)
+summary(model.gbmA$finalModel, 
+        las = 2, 
+        cBars = 14, 
+        cex.names = 0.7)
+```
+### PDP for top 3 variables
+```{r}
+# PDP for vaccine 
+pdp.vaccine <- model.gbmA |>
+  pdp::partial(pred.var = "vaccine",
+               grid.resolution = 100,
+               prob = TRUE) |>
+  autoplot(rug = TRUE, train = training_data) +
+  ggtitle("Vaccine Status")
+
+# PDP for SBP 
+pdp.sbp <- model.gbmA |>
+  pdp::partial(pred.var = "SBP",
+               grid.resolution = 100,
+               prob = TRUE) |>
+  autoplot(rug = TRUE, train = training_data) +
+  ggtitle("Systolic Blood Pressure")
+
+# PDP for BMI 
+pdp.bmi <- model.gbmA |>
+  pdp::partial(pred.var = "bmi",
+               grid.resolution = 100,
+               prob = TRUE) |>
+  autoplot(rug = TRUE, train = training_data) +
+  ggtitle("BMI")
+
+# Combine into one figure
+gridExtra::grid.arrange(pdp.vaccine, pdp.sbp, pdp.bmi, nrow = 1)
+```
+
+```{r}
+# Predicted risk scores from AdaBoost on test set
+risk_scores <- data.frame(
+  predicted_prob = gbmA.pred,
+  true_severity = testing_data$severity
+) |> 
+  arrange(desc(predicted_prob))
+
+# Top 10 highest risk patients
+risk_scores |>
+  head(10) |>
+  kable(caption = "Top 10 patients with highest predicted risk of severe COVID-19 infection.",
+        col.names = c("Predicted Probability", "True Severity"),
+        digits = 3)
+
+# Distribution of risk scores by true severity group
+risk_scores |>
+  group_by(true_severity) |>
+  summarise(
+    mean_risk = round(mean(predicted_prob), 3),
+    median_risk = round(median(predicted_prob), 3),
+    min_risk = round(min(predicted_prob), 3),
+    max_risk = round(max(predicted_prob), 3)
+  ) |>
+  kable(caption = "Distribution of predicted risk scores by true severity group.",
+        col.names = c("Severity Group", "Mean", "Median", "Min", "Max"))
+```
+
