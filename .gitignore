@@ -1,0 +1,14 @@
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*_cache/
+*_files/
+
+# Data (not redistributed)
+data/*.RData
+data/*.rds
+data/*.csv
+
+# OS
+.DS_Store
