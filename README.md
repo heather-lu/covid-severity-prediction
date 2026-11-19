@@ -9,7 +9,7 @@ Which patient characteristics predict severe COVID-19 infection, and do complex 
 ## Key findings
 
 - **The complex models were only slightly better.** AdaBoost and an RBF-kernel SVM reached a test AUC of **0.918**, compared with **0.911** for logistic regression and **0.896** for a decision tree. Most of the predictive signal is captured by a simple linear model.
-- **Vaccination status is the strongest predictor** (about 55% of relative influence). Unvaccinated patients had a predicted risk of about **0.59**, compared with **0.15** for vaccinated patients, roughly four times higher.
+- **Vaccination status is the strongest predictor** (about 55% of relative influence). Unvaccinated patients had a predicted risk of about **0.59**, compared with **0.14** for vaccinated patients, roughly four times higher.
 - **Blood pressure and BMI show threshold effects.** Predicted risk climbs sharply once systolic blood pressure passes about 125–140 mmHg, and once BMI rises above about 25 kg/m².
 - **The risk score separates the two groups well.** Severe cases had a mean predicted risk of 0.602, compared with 0.184 for non-severe cases. All 10 highest-scoring test patients were truly severe.
 
