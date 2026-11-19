@@ -51,7 +51,7 @@ AdaBoost had the highest mean cross-validated AUC, so it was chosen as the final
 |---|---|---|---|---|
 | Logistic regression | 0.861 | 0.867 | 0.676 | 0.885 |
 | Decision tree | 0.833 | 0.844 | 0.679 | 0.893 |
-| **AdaBoost** | **0.868** | 0.861 | 0.660 | 0.915 |
+| **AdaBoost** | **0.869** | 0.861 | 0.660 | 0.915 |
 | SVM-Radial | 0.859 | 0.871 | 0.734 | 0.810 |
 
 ### Partial dependence of the top three predictors
